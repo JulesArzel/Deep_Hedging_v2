@@ -199,5 +199,6 @@ class BS_transac_costs():
         Sims = []
         for _ in range(number):
             hedge = self.Hedging(frequence)
-            Sims.append(hedge['Portfolio'].values)
+            Sims.append(hedge[['Portfolio','Error']].values)
         return Sims
+

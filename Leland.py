@@ -189,5 +189,6 @@ class Leland():
         Sims = []
         for _ in range(number):
             hedge = self.Hedging()
-            Sims.append(hedge['Portfolio'].values)
+            Sims.append(hedge[['Portfolio','Error']].values)
         return Sims
+
