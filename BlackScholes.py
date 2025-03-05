@@ -91,8 +91,10 @@ class BS():
             steps = int(self.T * 252)
         elif frequence == 'weekly':
             steps = int(self.T * 50)
+        elif frequence == 'monthly':
+            steps = int(self.T * 12)
         else: 
-            raise ValueError("frequence must be 'minute', 'hourly', 'daily' or 'weekly'")  
+            raise ValueError("frequence must be 'minute', 'hourly', 'daily', 'weekly' or 'monthly'")  
         
         dt = self.T / steps
         Z = np.random.standard_normal(steps)
@@ -112,8 +114,10 @@ class BS():
             steps = int(self.T * 252)
         elif frequence == 'weekly':
             steps = int(self.T * 50)
+        elif frequence == 'monthly':
+            steps = int(self.T * 12)
         else: 
-            raise ValueError("frequence must be 'minute', 'hourly', 'daily' or 'weekly'")
+            raise ValueError("frequence must be 'minute', 'hourly', 'daily', 'weekly' or 'monthly'")  
         
         if self.position == 'long':
             sign = 1
