@@ -58,6 +58,7 @@ class OptionPricer:
         # dh[j, i, db]: the optimal hedge adjustment from state db at time j, node i.
         self.fb = np.zeros((self.n+1, self.n+1, self.h+1))
         self.dh = np.zeros((self.n+1, self.n+1, self.h+1))
+        self.hedg = np.zeros((self.n+1, self.n+1, self.h+1))
         
         # Will be set after pricing:
         self.option_value = None
@@ -89,6 +90,7 @@ class OptionPricer:
         S = self.S
         fb = self.fb
         dh = self.dh
+        hedg = self.hedg
         
         # At maturity j = n, payoff for each node i in [0..n].
         payoff = np.maximum(S[n, :n+1] - self.K, 0.0)
@@ -136,10 +138,14 @@ class OptionPricer:
                     # Convert utility back to monetary value:
                     fb[j, i, db] = self.utility_fn(max_util, self.a, self.option_type, self.utype, -1)
                     dh[j, i, db] = best_da - db
+                    hedg[j,i,db]=best_da
         
         # The option's fair value at time 0 is at (j=0, i=0, db=0).
         self.option_value = fb[0, 0, 0]
-        return self.option_value
+        self.fb = fb
+        self.dh = dh 
+        self.hedg = hedg
+        return self.option_value, self.fb, self.dh, self.hedg
 
     def simulate_forward(self):
         """
