@@ -105,9 +105,9 @@ class OptionPricer2:
                     cost = (np.abs(da - db) / h) * S[j, i] * self.c1
                     
                     # Value in the up state: at time j+1, node i, hedge da.
-                    up_value = (fb[j+1, i, :] - (da / h) * S[j+1, i]) * self.discount - dS - cost
+                    up_value = (fb[j+1, i, :] - (da / h) * S[j+1, i]) * self.discount - dS + cost
                     # Value in the down state: at time j+1, node i+1, hedge da.
-                    down_value = (fb[j+1, i+1, :] - (da / h) * S[j+1, i+1]) * self.discount - dS - cost
+                    down_value = (fb[j+1, i+1, :] - (da / h) * S[j+1, i+1]) * self.discount - dS + cost
                     
                     util_up = self.utility_fn(up_value, self.a, self.option_type, self.utype, 1)
                     util_down = self.utility_fn(down_value, self.a, self.option_type, self.utype, 1)

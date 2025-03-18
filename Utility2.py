@@ -41,7 +41,7 @@ class OptionPricer:
         self.dt = self.T / self.n
         self.u = np.exp(self.v * np.sqrt(self.dt))
         self.d = np.exp(-self.v * np.sqrt(self.dt))
-        self.p = (np.exp(self.mu * self.dt) - self.d) / (self.u - self.d)
+        self.p = (np.exp(self.r * self.dt) - self.d) / (self.u - self.d)
         self.discount = np.exp(-self.r * self.dt)
         
         # Build the binomial stock price tree S[j, i]:
@@ -121,10 +121,10 @@ class OptionPricer:
                             cost = (abs(da - db) / h) * S[j, i] * self.c1
                         
                         # Value in the up state => time j+1, node i, hedge da.
-                        up_value = ( fb[j+1, i, da] - (da/h)*S[j+1, i] ) * self.discount + dS + cost
+                        up_value = ( fb[j+1, i, da] - (da/h)*S[j+1, i] ) * self.discount - dS + cost
                         
                         # Value in the down state => time j+1, node i+1, hedge da.
-                        down_value = ( fb[j+1, i+1, da] - (da/h)*S[j+1, i+1] ) * self.discount + dS + cost
+                        down_value = ( fb[j+1, i+1, da] - (da/h)*S[j+1, i+1] ) * self.discount - dS + cost
                         
                         # Expected utility:
                         util_up = self.utility_fn(up_value, self.a, self.option_type, self.utype, 1)
