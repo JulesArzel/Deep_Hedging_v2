@@ -102,7 +102,7 @@ class PricerDP_no_tc:
                 down_value = ( value[j+1, i+1] - (hedge[j,i])*S[j+1, i+1] ) * self.discount - (hedge[j,i])*S[j, i]
                 util_up = self.utility_fn(up_value, self.a, self.option_type, self.utype, 1)
                 util_down = self.utility_fn(down_value, self.a, self.option_type, self.utype, 1)
-                    
+                print(util_down,util_up)
                 # Convert utility back to monetary value:
                 value[j, i] = self.utility_fn(self.p * util_up + (1 - self.p) * util_down, self.a, self.option_type, self.utype, -1)
                 

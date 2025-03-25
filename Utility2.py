@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-class OptionPricer:
+class DP:
     def __init__(self, So, K, v, mu, r, T, n, h, c1, c2, c3, a, option_type=None, utype=None):
         """
         Initialize the OptionPricer with the required parameters.
