@@ -96,3 +96,37 @@ plt.title("Value Function at t=0 for S=S0 (No Option)")
 plt.legend()
 plt.grid(True)
 plt.show()
+
+
+
+
+def solve_dp_no_transaction_cost(terminal_utility_func):
+    U = {}
+    Pi = {}
+    for i in range(N_t + 1):
+        S_val = S0 * (u**i) * (d**(N_t - i))
+        U[(N_t, i)] = terminal_utility_func(S_val)
+        Pi[(N_t, i)] = np.zeros(N_W)
+
+    for n in reversed(range(N_t)):
+        for i in range(n + 1):
+            S_val = S0 * (u**i) * (d**(n - i))
+            U_val = np.zeros(N_W)
+            Pi_val = np.zeros(N_W)
+            for j, W in enumerate(W_grid):
+                best_val = -1e12
+                best_pi = -1e12
+                for pi in pi_vals:
+                    W_up = W * (1 + r * dt + pi * ((alpha - r) * dt + sigma * np.sqrt(dt)))
+                    W_down = W * (1 + r * dt + pi * ((alpha - r) * dt - sigma * np.sqrt(dt)))
+                    U_up = interp_value(W_up, W_grid, U[(n+1, i+1)])
+                    U_down = interp_value(W_down, W_grid, U[(n+1, i)])
+                    U_pi = p * U_up + (1 - p) * U_down
+                    if U_pi > best_val:
+                        best_val = U_pi
+                        best_pi = pi
+                U_val[j] = best_val
+                Pi_val[j] = best_pi
+            U[(n, i)] = U_val
+            Pi[(n, i)] = Pi_val
+    return U, Pi
