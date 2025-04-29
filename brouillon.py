@@ -1,178 +1,148 @@
-# ------------------------------
-# Parameters
-# ------------------------------
-T = 1.0
-N_t = 40
-dt = T / N_t
+tc2 = TC2.price(N=500, TYPE="writer", track_policy=True, Time=False)
+print(f"{cost} TC price : ",tc2)
+intensity = compute_trading_intensity(TC2)
+print("Trading‐intensity metric:", intensity)
 
-S0 = 100.0
-sigma = 0.3
-alpha = 0.05
-r = 0.03
-K = 100.0
+t_plot = 0.1 # Time we want to plot in percentage 
+
+N = 500
+k = int(round(t_plot / TC2.T * N))
+
+# Grid of prices from the tree 
+dt = TC2.T / N
+dx = TC2.sig * np.sqrt(dt)
+x0 = np.log(TC2.S0)
+x_k = x0 + (TC2.mu - 0.5 * TC2.sig**2)*dt*k + (2*np.arange(k+1) - k)*dx
+
+# Grid for possible stock holdings
+M = int(0.8*np.floor(N/2))
+dy = dx
+y = np.linspace(-M*dy, M*dy, 2*M+1)
+
+A = TC2.action_slices["writer"][k]    # shape (k+1, len(y))
+Q = TC2.Q_slices["writer"][k]         # = E[e^{–γW_T}]
+U = 1 - Q                             # indirect utility U_t
+
+X, Y = np.meshgrid(x_k, y, indexing='xy')  # Y-axis = shares, X-axis = log price
+
+from scipy.stats import norm
+
+# a) Policy plot
+plt.figure(figsize=(6,4))
+cmap = plt.get_cmap('RdYlBu', 3) 
+im = plt.pcolormesh(X, Y, A.T, cmap=cmap, vmin=-1, vmax=1)
+plt.colorbar(im, ticks=[-1,0,1], label='Policy')
+plt.xlabel('log price')
+plt.ylabel('shares y')
+plt.title(f'Optimal Policy at t={t_plot}')
+
+# convert log‐grid back to real-price if you want S‐axis, 
+# or keep x_k for log‐price axis
+tau    = TC2.T - t_plot
+S_k    = np.exp(x_k)
+d1      = (np.log(S_k/TC2.K) + (TC2.r + 0.5*TC2.sig**2)*tau) \
+            / (TC2.sig * np.sqrt(tau))
+delta_bs = norm.cdf(d1)
+# if your x‐axis is log‐price:
+#plt.plot(x_k, delta_bs, 'k--', linewidth=1, label='BS Δ')
+# if you had converted X axis to real price S_grid, instead use:
+# plt.plot(S_k, delta_bs, 'k--', linewidth=2, label='BS Δ')
+
+# Optimal trading policy in theory, with no transaction costs
+mu, r, sigma = diff_param.mu, diff_param.r, diff_param.sig
+K = opt_param.K
 gamma = 0.5
-lambda_tc = 0.01
 
-pi_vals = np.linspace(-2, 2, 100)
+tau = TC2.T - t_plot
+d1 = (np.log(S_k/K) + (r + 0.5*sigma**2)*tau) / (sigma * np.sqrt(tau))
+delta_bs = norm.cdf(d1)
 
-u = np.exp(sigma * np.sqrt(dt))
-d = np.exp(-sigma * np.sqrt(dt))
-#p = (np.exp(alpha * dt) - d) / (u - d)
-p=0.5
+disc = np.exp(-r * tau)                 # δ(T,s)
+drift_adj = (mu - r) / (sigma**2)
+phi_w = delta_bs + disc/(gamma * S_k) * drift_adj
 
-# ------------------------------
-# Wealth Grid
-# ------------------------------
-W_min, W_max = 1e-3, 200.0
-N_W = 500
-W_grid = np.linspace(W_min, W_max, N_W)
+plt.plot(x_k, phi_w, 'k--', linewidth=1, label=r'$\Delta_{BS}+\frac{\delta(T,s)(\alpha-r)}{\gamma S \sigma^2}$')
 
-# ------------------------------
-# Utility Function
-# ------------------------------
-def utility(x):
-    return max(x,1e-8)**gamma / gamma if x > 0 else -1e12
-
-# ------------------------------
-# Interpolation Helper
-# ------------------------------
-def interp_value(W_new, grid, values):
-    return np.interp(W_new, grid, values)
-
-# ==============================
-# Part 1: No Transaction Costs
-# ==============================
-
-# ------------------------------
-# Terminal Utility without Option
-# ------------------------------
-def terminal_utility_no_option(S):
-    return np.array([utility(W) for W in W_grid])
-
-# ------------------------------
-# Dynamic Programming Solver (No Transaction Costs, No Option)
-# ------------------------------
-
-def solve_dp_no_transaction_cost(terminal_utility_func):
-    U = {}
-    Pi = {}
-
-    for i in range(N_t + 1):
-        S_val = S0 * (u**i) * (d**(N_t - i))
-        U[(N_t, i)] = terminal_utility_func(S_val)
-        Pi[(N_t, i)] = np.zeros(N_W)
-
-    for n in reversed(range(N_t)):
-        for i in range(n + 1):
-            S_val = S0 * (u**i) * (d**(n - i))
-            U_val = np.zeros(N_W)
-            Pi_val = np.zeros(N_W)
-
-            for j, W in enumerate(W_grid):
-                def objective_pi(pi):
-                    W_up = W * (1 + r * dt + pi * ((alpha - r) * dt + sigma * np.sqrt(dt)))
-                    W_down = W * (1 + r * dt + pi * ((alpha - r) * dt - sigma * np.sqrt(dt)))
-                    U_up = interp_value(W_up, W_grid, U[(n+1, i+1)])
-                    U_down = interp_value(W_down, W_grid, U[(n+1, i)])
-
-                    expected_U = p * U_up + (1 - p) * U_down
-                    return -expected_U  
-
-                res = minimize_scalar(
-                    objective_pi,
-                    bounds=(-2, 2), 
-                    method='bounded'
-                )
-
-                Pi_val[j] = res.x
-                U_val[j] = -res.fun  
-
-            U[(n, i)] = U_val
-            Pi[(n, i)] = Pi_val
-        print(f"Processing time step {n} of {N_t-1}...")
-
-    return U, Pi
-
-# ------------------------------
-# Solve and Plot (No Option)
-# ------------------------------
-U_no_opt, Pi_no_opt = solve_dp_no_transaction_cost(terminal_utility_no_option)
-
-plt.figure(figsize=(8, 6))
-plt.plot(W_grid, U_no_opt[(0, 0)], 'b-', label="U(0,S0,W) no option")
-plt.xlabel("Wealth, W")
-plt.ylabel("Value Function U")
-plt.title("Value Function at t=0 for S=S0 (No Option)")
-plt.legend()
-plt.grid(True)
+plt.legend(loc='upper left')
 plt.show()
 
-Pi_theo = np.full((N_W,N_t),(alpha-r)/(sigma**2*(1-gamma))) 
-
-
-plt.figure(figsize=(8, 6))
-plt.plot(W_grid, Pi_no_opt[(0, 0)], 'b-', label="$\pi$(0,S0,W) no option")
-plt.plot(W_grid,Pi_theo[:,0],'r-', label='$\pi$ theoretical')
-plt.xlabel("Wealth, W")
-plt.ylabel("Value Function U")
-plt.title("Value Function at t=0 for S=S0 (No Option)")
-plt.legend()
-plt.grid(True)
+# b) Indirect utility plot
+'''plt.figure(figsize=(6,4))
+im2 = plt.pcolormesh(X, Y, U.T, shading='auto')
+plt.colorbar(im2, label='U_t = 1 - E[e^{-γW_T}]')
+plt.xlabel('log price')
+plt.ylabel('shares y')
+plt.title(f'Indirect Utility at t={t_plot}')
 plt.show()
+'''
 
-# ------------------------------
-# Terminal Utility with Option
-# ------------------------------
 
-def terminal_utility_with_option(S):
-    payoff = max(S - K, 0.0)
-    return np.array([utility(max(W - payoff, 1e-8)) for W in W_grid])
 
-# ------------------------------
-# Solve and Plot (With Option)
-# ------------------------------
-U_with_opt, Pi_with_opt = solve_dp_no_transaction_cost(terminal_utility_with_option)
 
-plt.figure(figsize=(8, 6))
-plt.plot(W_grid, U_with_opt[(0, 0)], 'r--', label="U(0,S0,W) with option")
-plt.xlabel("Wealth, W")
-plt.ylabel("Value Function U")
-plt.title("Value Function at t=0 for S=S0 (With Short Call Option)")
+gamma = 0.0001
+pricer0 = TC_pricer2(opt_param, diff_param, cost_b=0.0, cost_s=0.0, gamma=gamma)
+
+# --- 1) Solve with zero transaction costs ---
+price0 = pricer0.price(N=500, TYPE="writer", track_policy=True)
+
+bs = BS.closed_formula()
+
+print("Zero TC price: ", price0)
+change = round(((tc2-price0)/price0)*100,2)
+print(f"Sensitivity to Transaction Costs : {change}%")
+print("Black Scholes price:", bs)
+print("Difference:", np.abs(price0 - bs))
+
+
+# --- 2) Extract model parameters ---
+mu, r, sigma = diff_param.mu, diff_param.r, diff_param.sig
+K = opt_param.K
+
+# --- 3) Pick a time slice t_plot ---
+t_plot = 0.5
+N = 500
+k = int(round(t_plot / pricer0.T * N))
+dt = pricer0.T / N
+dx = sigma * np.sqrt(dt)
+
+# --- 4) Rebuild your (x,y) grids at time k ---
+# log‐price grid
+x0 = np.log(pricer0.S0)
+x_k = x0 + (mu - 0.5 * sigma**2) * dt * k + (2 * np.arange(k+1) - k) * dx
+S_k = np.exp(x_k)
+
+# share‐position grid
+M = int(0.8*np.floor(N / 2))
+dy = dx
+y = np.linspace(-M*dy, M*dy, 2*M+1)
+
+# --- 5) Extract the DP policy at slice k ---
+A = pricer0.action_slices["writer"][k]   # shape (k+1, len(y))
+
+# --- 6) Compute Black–Scholes delta and φ_w(s,S) from eq. (4.31) ---
+tau = pricer0.T - t_plot
+d1 = (np.log(S_k/K) + (r + 0.5*sigma**2)*tau) / (sigma * np.sqrt(tau))
+delta_bs = norm.cdf(d1)
+
+disc = np.exp(-r * tau)                 # δ(T,s)
+drift_adj = (mu - r) / (sigma**2)
+phi_w = delta_bs + disc/(gamma * S_k) * drift_adj
+phi_w = np.clip(phi_w, y[0], y[-1])
+
+# --- 7) Plot the DP action map and overlay φ_w ---
+X, Y = np.meshgrid(x_k, y, indexing='xy')
+
+plt.figure(figsize=(8,4))
+cmap = plt.get_cmap('RdYlBu', 3)
+plt.pcolormesh(X, Y, A.T, cmap=cmap, vmin=-1, vmax=1, shading='auto')
+
+# dashed line = theoretical φ_w(s,S)
+plt.plot(x_k, phi_w, 'k--', linewidth=1, label=r'$\varphi_w(s,S)$ (eq 4.31)')
+
+plt.colorbar(ticks=[-1,0,1], label='Action: -1=sell, 0=hold, +1=buy')
+plt.xlabel('log‐price $x$')
+plt.ylabel('position $y$')
+plt.title(f'Writer policy at t={t_plot:.2f}, tc=0, γ={gamma}')
 plt.legend()
-plt.grid(True)
-plt.show()
-
-# ------------------------------
-# Theoretical pi values when there is a position in option
-# ------------------------------
-
-Pi_theo_opt = {}
-for n in reversed(range(N_t)):
-    for i in range(n+1): 
-        S_val = S0 * (u**i) * (d**(n - i))
-        Price = call_price(0, S_val, (N_t-n)/N_t, r, sigma, K)  
-        Delt = Delta(0, S_val, (N_t-n)/N_t, r, sigma, K)
-        Pi_vals = np.zeros(N_W)
-        for j, W in enumerate(W_grid):
-            Pi_vals[j] = (alpha-r)/(sigma**2*(1-gamma))*((W-Price)/W)+(Price/W)*Delt
-        Pi_theo_opt[(n,i)] = Pi_vals
-        
-# ------------------------------
-# Proportion for BS Delta Hedging
-# ------------------------------
-
-Delt = Delta(0,S0,T,r,sigma,K)
-Pi_delta_0 = [min((Delt*S0)/W,4) for W in W_grid] 
-print('Delta Black-Scholes =', Delt)
-
-plt.figure(figsize=(10, 6))
-plt.plot(W_grid, Pi_with_opt[(0, 0)], label='$\pi$ with option', lw=2)
-plt.plot(W_grid, Pi_theo_opt[(0,0)], label="$\pi$ with option (theoretical)")
-plt.plot(W_grid, Pi_delta_0, label = '$\pi$ from BS Delta Hedging')
-plt.xlabel("Wealth, W")
-plt.ylabel("Optimal proportion")
-plt.ylim((-2,3))
-plt.title("Optimal theoretical proportion vs real proportion")
-plt.legend()
-plt.grid(True)
+plt.tight_layout()
 plt.show()
