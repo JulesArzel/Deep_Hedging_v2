@@ -53,21 +53,37 @@ def buyer(x, y, cost_b, cost_s, K):
     return cost
 
 
-def callspread(x, y, cost_b, cost_s, K1, K2):
-    cost = np.zeros((len(x), len(y)))
 
-    for i in range(len(x)):
-        for j in range(len(y)):
-            if y[j] < 0 and np.max(np.exp(x[i])-K1,0)-np.max(np.exp(x[i])-K2) <= 0:
-                cost[i][j] = (1 + cost_b) * y[j] * np.exp(x[i])
+def callspread_writer(x, y, cost_b, cost_s, K1, K2):
+    S = np.exp(x)[:, None]        # shape (Nx,1)
+    Y = y[None, :]                # shape (1,Ny)
 
-            elif y[j] >= 0 and np.max(np.exp(x[i])-K1,0)-np.max(np.exp(x[i])-K2) <= 0:
-                cost[i][j] = (1 - cost_s) * y[j] * np.exp(x[i])
+    # cash‐flow from spread for the writer = -(buyer‐payoff)
+    payoff_buyer = np.maximum(S - K1, 0) - np.maximum(S - K2, 0)
+    cash = - payoff_buyer         # writer’s cash-in = – buyer’s cash-out
 
-            elif y[j] >= 0 and np.max(np.exp(x[i])-K1,0)-np.max(np.exp(x[i])-K2) > 0:
-                cost[i][j] = ((1 - cost_s) * (y[j]) * np.exp(x[i])) + np.max(np.exp(x[i])-K1,0)-np.max(np.exp(x[i])-K2)
+    # liquidation cost of Y shares
+    stock_cost = np.where(
+        Y < 0,
+        (1 + cost_b) * Y * S,
+        (1 - cost_s) * Y * S
+    )                             # shape (Nx,Ny)
 
-            elif y[j] < 0 and np.max(np.exp(x[i])-K1,0)-np.max(np.exp(x[i])-K2) > 0:
-                cost[i][j] = ((1 + cost_b) * (y[j]) * np.exp(x[i])) + np.max(np.exp(x[i])-K1,0)-np.max(np.exp(x[i])-K2)
+    # total cost = stock_cost MINUS cash you receive
+    return stock_cost + cash      # shape (Nx,Ny)
 
-    return cost
+def callspread_buyer(x, y, cost_b, cost_s, K1, K2):
+    S = np.exp(x)[:, None]
+    Y = y[None, :]
+
+    # buyer’s cash‐flow = max(S-K1,0) - max(S-K2,0)
+    cash =   np.maximum(S - K1, 0) - np.maximum(S - K2, 0)
+
+    stock_cost = np.where(
+        Y < 0,
+        (1 + cost_b) * Y * S,
+        (1 - cost_s) * Y * S
+    )
+
+    # cost = liquidation + (–cash you pay)
+    return stock_cost + cash

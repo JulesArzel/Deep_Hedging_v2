@@ -78,8 +78,10 @@ class TC_pricer_CS:
             xN = x0 + (self.mu - 0.5*self.sig**2)*dt*N + (2*np.arange(N+1) - N)*dx
             if portfolio == "no_opt":
                 Q = np.exp(-self.gamma * cost.no_opt(xN, y_grid, self.cost_b, self.cost_s))
-            elif portfolio == "callspread":
-                Q = np.exp(-self.gamma * cost.callspread(xN, y_grid, self.cost_b, self.cost_s, self.K1,self.K2))
+            elif portfolio == "callspread_writer":
+                Q = np.exp(-self.gamma * cost.callspread_writer(xN, y_grid, self.cost_b, self.cost_s, self.K1,self.K2))
+            elif portfolio == "callspread_buyer":
+                Q = np.exp(-self.gamma * cost.callspread_buyer(xN, y_grid, self.cost_b, self.cost_s, self.K1,self.K2))
 
             # Initialize slices if needed
             if track_policy:
@@ -132,7 +134,7 @@ class TC_pricer_CS:
 
         # Final price calculation
         price = (delta[0]/self.gamma)*np.log(
-            (Q_yes/Q_no) if TYPE=="writer" else (Q_no/Q_yes)
+            (Q_yes/Q_no) if TYPE=="callspread_writer" else (Q_no/Q_yes)
         )
 
         # Save tracking if requested
