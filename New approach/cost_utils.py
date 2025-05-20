@@ -31,6 +31,19 @@ def writer(x, y, cost_b, cost_s, K):
                 cost[i][j] = ((1 + cost_b) * (y[j] - 1) * np.exp(x[i])) + K
 
     return cost
+    
+'''def writer(x, y, cost_b, cost_s, K):
+    S = np.exp(x)[:, None]        # shape (Nx,1)
+    Y = y[None, :]                # shape (1,Ny)
+    payoff = np.maximum(S - K, 0)
+    # writer pays option payoff
+    stock_cost = np.where(
+        Y < 0,
+        (1 + cost_b) * Y * S,
+        (1 - cost_s) * Y * S
+    )
+    return stock_cost - payoff'''
+
 
 
 def buyer(x, y, cost_b, cost_s, K):
@@ -51,6 +64,18 @@ def buyer(x, y, cost_b, cost_s, K):
                 cost[i][j] = ((1 + cost_b) * (y[j] + 1) * np.exp(x[i])) - K
 
     return cost
+    
+'''def buyer(x, y, cost_b, cost_s, K):
+    S = np.exp(x)[:, None]
+    Y = y[None, :]
+    payoff = np.maximum(S - K, 0)
+    stock_cost = np.where(
+        Y < 0,
+        (1 + cost_b) * Y * S,
+        (1 - cost_s) * Y * S
+    )
+    return stock_cost + payoff'''
+
 
 
 
