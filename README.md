@@ -1,7 +1,16 @@
 # Deep_Hedging_v2
 Comparison of various hedging strategies in the presence of transaction costs, includes a written document to explain the strategies (Deep_Hedging(2).pdf).
-
+\\
+\\
+**BS-Leland** : 
+\\
+Introductory results on Black-Scholes and why it becomes inefficient when transaction costs are introduced, and results on the first approach to transaction costs : Leland.
+\\
+\\
 **New approach** : 
+\\
+All results exposed either in the pdf or in the notebook 
+\\
 Contains the *deep hedging free* approach, based on stochastic control and dynamic programming.
 We consider a portfolio consisting of a risk free asset and one risky asset (the stock), and a short position in a call option (or Call Spread) (the underlying being the stock in the portfolio), and the goal is to maximize the expected utility of the terminal wealth in the portfolio. 
 We solve this by backwards dynamic programming and get as output the hedging strategy and the price of the option, obtained as the smallest quantity to add to the portfolio with a position in the option, so that the investor is indifferent between holding and not holding the option.
