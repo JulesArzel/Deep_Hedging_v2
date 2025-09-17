@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 import torch
-from pfhedge.instruments import BaseDerivative, EuropeanOption, BrownianStock
-
+from pfhedge.instruments import BaseDerivative
+from pfhedge.features import LogMoneyness, TimeToMaturity, Volatility, PrevHedge
 
 class NegativeEuropeanOption(BaseDerivative):
     def __init__(self, underlier, strike=1.0, maturity=1.0):
@@ -20,7 +18,7 @@ class NegativeEuropeanOption(BaseDerivative):
         index = ... if time_step is None else [time_step]
         output = spot[..., index] / self.strike
         if log:
-            return torch.log(output)
+            output = output.log()
         return output
 
     def log_moneyness(self, time_step=None):
@@ -37,22 +35,14 @@ class NegativeEuropeanOption(BaseDerivative):
             t = torch.tensor([[time]]).to(spot) * self.underlier.dt
             return t.expand(n_paths, -1)
 
-    def volatility(self, time_step=None):
-        return self.underlier.volatility(time_step=time_step)
+    def setup_features(self):
+        self.features.add(LogMoneyness(self))
+        self.features.add(TimeToMaturity(self))
+        self.features.add(Volatility(self))
+        self.features.add(PrevHedge())
 
-    def inputs(self):
-        return ["log_moneyness", "time_to_maturity", "volatility"]
-
-    def init(self, spot: torch.Tensor, n_steps: int, dt: float):
-        self.underlier.init(spot, n_steps, dt)
-        return self
-
-    def list(self, pricer):
-        self.pricer = pricer
-        return self
-
-    def ul(self):
-        return self.underlier
+    def extra_repr(self):
+        return f"NegativeEuropeanOption(strike={self.strike}, maturity={self.maturity})"
 
 
 class CallSpread(BaseDerivative):
@@ -70,10 +60,9 @@ class CallSpread(BaseDerivative):
     def moneyness(self, time_step=None, log=False):
         spot = self.underlier.spot
         index = ... if time_step is None else [time_step]
-        # For a spread, define moneyness relative to lower strike
         output = spot[..., index] / self.strike_long
         if log:
-            return torch.log(output)
+            output = output.log()
         return output
 
     def log_moneyness(self, time_step=None):
@@ -90,19 +79,12 @@ class CallSpread(BaseDerivative):
             t = torch.tensor([[time]]).to(spot) * self.underlier.dt
             return t.expand(n_paths, -1)
 
-    def volatility(self, time_step=None):
-        return self.underlier.volatility(time_step=time_step)
+    def setup_features(self):
+        self.features.add(LogMoneyness(self))
+        self.features.add(TimeToMaturity(self))
+        self.features.add(Volatility(self))
+        self.features.add(PrevHedge())
 
-    def inputs(self):
-        return ["log_moneyness", "time_to_maturity", "volatility"]
+    def extra_repr(self):
+        return f"CallSpread(strike_long={self.strike_long}, strike_short={self.strike_short}, maturity={self.maturity})"
 
-    def init(self, spot: torch.Tensor, n_steps: int, dt: float):
-        self.underlier.init(spot, n_steps, dt)
-        return self
-
-    def list(self, pricer):
-        self.pricer = pricer
-        return self
-
-    def ul(self):
-        return self.underlier
