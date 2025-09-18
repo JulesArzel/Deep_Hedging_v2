@@ -169,3 +169,19 @@ class MultiLayerPerceptron(Sequential):
         layers.append(deepcopy(out_activation))
 
         super().__init__(*layers)
+
+class LSTMHedger(Module):
+    def __init__(self, input_dim, hidden_dim=64, num_layers=1, output_dim=1):
+        super().__init__()
+        self.lstm = torch.nn.LSTM(
+            input_dim,
+            hidden_dim,
+            num_layers=num_layers,
+            batch_first=True
+        )
+        self.fc = torch.nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        h, _ = self.lstm(x)   
+        out = self.fc(h)      
+        return out
