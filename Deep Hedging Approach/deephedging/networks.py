@@ -64,85 +64,6 @@ class TwoHeadHedgeNet(Module):
         return hedge_with, hedge_no
 
 class MultiLayerPerceptron(Sequential):
-    r"""Creates a multilayer perceptron.
-
-    Number of input features is lazily determined.
-
-    Args:
-        in_features (int, optional): Size of each input sample.
-            If ``None`` (default), the number of input features will be
-            will be inferred from the ``input.shape[-1]`` after the first call to
-            ``forward`` is done. Also, before the first ``forward`` parameters in the
-            module are of :class:`torch.nn.UninitializedParameter` class.
-        out_features (int, default=1): Size of each output sample.
-        n_layers (int, default=4): The number of hidden layers.
-        n_units (int or tuple[int], default=32): The number of units in
-            each hidden layer.
-            If ``tuple[int]``, it specifies different number of units for each layer.
-        activation (torch.nn.Module, default=torch.nn.ReLU()):
-            The activation module of the hidden layers.
-            Default is a :class:`torch.nn.ReLU` instance.
-        out_activation (torch.nn.Module, default=torch.nn.Identity()):
-            The activation module of the output layer.
-            Default is a :class:`torch.nn.Identity` instance.
-
-    Shape:
-        - Input: :math:`(N, *, H_{\text{in}})` where
-          :math:`*` means any number of additional dimensions and
-          :math:`H_{\text{in}}` is the number of input features.
-        - Output: :math:`(N, *, H_{\text{out}})` where
-          all but the last dimension are the same shape as the input and
-          :math:`H_{\text{out}}` is the number of output features.
-
-    Examples:
-
-        By default, ``in_features`` is lazily determined:
-
-        >>> import torch
-        >>> from pfhedge.nn import MultiLayerPerceptron
-        >>>
-        >>> m = MultiLayerPerceptron()
-        >>> m
-        MultiLayerPerceptron(
-          (0): LazyLinear(in_features=0, out_features=32, bias=True)
-          (1): ReLU()
-          (2): Linear(in_features=32, out_features=32, bias=True)
-          (3): ReLU()
-          (4): Linear(in_features=32, out_features=32, bias=True)
-          (5): ReLU()
-          (6): Linear(in_features=32, out_features=32, bias=True)
-          (7): ReLU()
-          (8): Linear(in_features=32, out_features=1, bias=True)
-          (9): Identity()
-        )
-        >>> _ = m(torch.zeros(3, 2))
-        >>> m
-        MultiLayerPerceptron(
-          (0): Linear(in_features=2, out_features=32, bias=True)
-          (1): ReLU()
-          (2): Linear(in_features=32, out_features=32, bias=True)
-          (3): ReLU()
-          (4): Linear(in_features=32, out_features=32, bias=True)
-          (5): ReLU()
-          (6): Linear(in_features=32, out_features=32, bias=True)
-          (7): ReLU()
-          (8): Linear(in_features=32, out_features=1, bias=True)
-          (9): Identity()
-        )
-
-        Specify different number of layers for each layer:
-
-        >>> m = MultiLayerPerceptron(1, 1, n_layers=2, n_units=(16, 32))
-        >>> m
-        MultiLayerPerceptron(
-          (0): Linear(in_features=1, out_features=16, bias=True)
-          (1): ReLU()
-          (2): Linear(in_features=16, out_features=32, bias=True)
-          (3): ReLU()
-          (4): Linear(in_features=32, out_features=1, bias=True)
-          (5): Identity()
-        )
-    """
 
     def __init__(
         self,
@@ -185,3 +106,55 @@ class LSTMHedger(Module):
         h, _ = self.lstm(x)   
         out = self.fc(h)      
         return out
+
+class GatedHedgeMLP(torch.nn.Module):
+    """
+    Two-head model:
+      - gate head outputs p in (0,1)
+      - action head outputs delta_y
+    Output is y_t (hedge ratio), compatible with pfhedge Hedger.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        hidden_sizes=(32, 32),
+        action_scale: float = 2.0,
+        gate_temperature: float = 1.0,
+        prev_hedge_index: int = -1,  # assumes prev_hedge is last feature
+    ):
+        super().__init__()
+        self.prev_hedge_index = prev_hedge_index
+        self.action_scale = float(action_scale)
+        self.gate_temperature = float(gate_temperature)
+
+        layers = []
+        d = in_features
+        for h in hidden_sizes:
+            layers += [torch.nn.Linear(d, h), torch.nn.ReLU()]
+            d = h
+        self.backbone = torch.nn.Sequential(*layers)
+
+        self.gate_head = torch.nn.Linear(d, 1)    # outputs logit
+        self.action_head = torch.nn.Linear(d, 1)  # outputs unconstrained delta
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (N, 1, F) as provided by pfhedge features.
+        returns y_t: (N, 1, 1)
+        """
+        # extract prev hedge y_{t^-}
+        y_prev = x[..., self.prev_hedge_index:self.prev_hedge_index+1]  # (N,1,1)
+
+        h = self.backbone(x)  # (N,1,H)
+
+        # gate probability p_t in (0,1)
+        logits = self.gate_head(h) / self.gate_temperature
+        p = torch.sigmoid(logits)  # (N,1,1)
+
+        # proposed action delta_y (bounded a bit for stability)
+        delta_raw = self.action_head(h)
+        delta_y = self.action_scale * torch.tanh(delta_raw)  # (N,1,1)
+
+        y = y_prev + p * delta_y
+        return y
