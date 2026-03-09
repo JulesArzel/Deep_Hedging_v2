@@ -5,7 +5,6 @@ with extraction of the indirect utility and optimal trading policy.
 
 from time import time
 import numpy as np
-import numpy.matlib
 import cost_utils as cost
 
 class TC_pricer_CS:
@@ -39,7 +38,7 @@ class TC_pricer_CS:
         self.Q_slices      = None
         self.action_slices = None
 
-    def price(self, N=500, TYPE="callspread", track_policy=False, Time=False):
+    def price(self, N=500, TYPE="callspread_writer", track_policy=False, Time=False):
         """
         N = number of time steps
         TYPE = "writer" or "buyer" or "callspread"
@@ -57,7 +56,6 @@ class TC_pricer_CS:
         dy       = dx
         M        = int(0.8*np.floor(N / 2))
         y_grid   = np.linspace(-M*dy, M*dy, 2*M+1)
-        N_y      = len(y_grid)
         med      = np.where(y_grid == 0)[0].item()
 
         # Transaction multipliers

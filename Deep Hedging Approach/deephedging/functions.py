@@ -1,5 +1,4 @@
 import torch
-from math import log
 from torch.distributions.normal import Normal
 
 def crra_utility(w, gamma=0.5):
@@ -9,31 +8,29 @@ def exp_utility(w, gamma=0.5, clamp_min=-100.0, clamp_max=100.0):
     w_clamped = w.clamp(min=clamp_min, max=clamp_max)
     return -torch.exp(-gamma * w_clamped)
 
-def notransactionband(K,T,t,sigma, model):
-    
-    # Black–Scholes delta
-    def bs_delta(S, K, T, t, sigma):
-        tau = torch.tensor(T - t, dtype=S.dtype, device=S.device)
-        d1 = (S / K).log().add(0.5 * sigma**2 * tau) / (sigma * tau.sqrt())
-        normal = Normal(0.0, 1.0)
-        return normal.cdf(d1)
+def notransactionband(K, T, t, sigma, model):
+    """
+    Extract the no-transaction band from a trained NoTransactionBandNet.
+    """
+    def bs_delta(log_m, tau, sigma):
+        d1 = (log_m + 0.5 * sigma**2 * tau) / (sigma * tau.sqrt())
+        return Normal(0.0, 1.0).cdf(d1)
 
-    # Grid of spot prices and corresponding log-moneyness
-    S_vals = torch.linspace(0.65 * K, 1.5 * K, 1000)
-    log_moneyness = (S_vals / K).log()
-    t_vals = torch.full_like(S_vals, t)
+    tau           = T - t
+    S_vals        = torch.linspace(0.65 * K, 1.5 * K, 1000)
+    log_moneyness = (S_vals / K).log()           
+    ttm_vals      = torch.full_like(S_vals, tau)         
+    vol_vals      = torch.full_like(S_vals, sigma)              
 
-    # Prepare model input
-    prev_hedge = torch.zeros_like(S_vals)
-    x_mlp_input = torch.stack([S_vals, t_vals, prev_hedge], dim=-1)  # shape [100, 3]
+    # NoTransactionBandNet.mlp receives (log_moneyness, time_to_maturity, volatility)
+    x_mlp_input = torch.stack([log_moneyness, ttm_vals, vol_vals], dim=-1)
 
-    # Forward pass
     with torch.no_grad():
-        delta_vals = bs_delta(S_vals, K, T, t, sigma)
+        delta_vals = bs_delta(log_moneyness, ttm_vals, sigma)
         width_vals = model.mlp(x_mlp_input)
         lower = delta_vals - torch.nn.functional.leaky_relu(width_vals[:, 0])
         upper = delta_vals + torch.nn.functional.leaky_relu(width_vals[:, 1])
-        
+
     return log_moneyness, delta_vals, lower, upper
 
 def compute_trade_frequency_pfhedge(hedge: torch.Tensor) -> float:
@@ -57,7 +54,7 @@ def compute_avg_num_shares_traded_pfhedge(hedge: torch.Tensor) -> float:
     return total_traded / total_steps
 
 def compute_pnl(spot: torch.Tensor, hedge: torch.Tensor, cost: float = 0.0, initial_cash: torch.Tensor = None) -> torch.Tensor:
-    n_paths, n_steps = hedge.shape
+    n_paths = hedge.shape[0]
 
     dS = spot[:, 1:] - spot[:, :-1] 
     pnl_risky = (hedge * dS).sum(dim=1)  

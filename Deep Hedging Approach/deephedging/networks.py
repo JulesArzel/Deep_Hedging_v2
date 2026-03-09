@@ -4,8 +4,6 @@ from typing import Optional
 from typing import Sequence
 from typing import Union
 
-import numpy as np
-
 import torch
 import torch.nn.functional as fn
 from torch import Tensor
@@ -18,8 +16,6 @@ from torch.nn import Sequential
 
 from pfhedge.nn import BlackScholes
 from pfhedge.nn import Clamp
-from pfhedge.nn import MultiLayerPerceptron
-from pfhedge.features import LogMoneyness, TimeToMaturity, Volatility, PrevHedge
 
 
 class NoTransactionBandNet(Module):
