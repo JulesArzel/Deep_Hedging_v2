@@ -8,30 +8,72 @@ def exp_utility(w, gamma=0.5, clamp_min=-100.0, clamp_max=100.0):
     w_clamped = w.clamp(min=clamp_min, max=clamp_max)
     return -torch.exp(-gamma * w_clamped)
 
+def _bs_delta_np(log_m, tau, sigma):
+    """BS delta as a torch computation (shared by both band helpers)."""
+    d1 = (log_m + 0.5 * sigma ** 2 * tau) / (sigma * tau.sqrt())
+    return Normal(0.0, 1.0).cdf(d1)
+
+
 def notransactionband(K, T, t, sigma, model):
     """
-    Extract the no-transaction band from a trained NoTransactionBandNet.
-    """
-    def bs_delta(log_m, tau, sigma):
-        d1 = (log_m + 0.5 * sigma**2 * tau) / (sigma * tau.sqrt())
-        return Normal(0.0, 1.0).cdf(d1)
+    Extract the no-transaction band from a trained NoTransactionBandNet
+    or WWGuidedNTBN.  Works for both architectures.
 
+    Returns: log_moneyness, delta_vals, lower, upper  (all Tensors, length 1000)
+    """
     tau           = T - t
     S_vals        = torch.linspace(0.65 * K, 1.5 * K, 1000)
-    log_moneyness = (S_vals / K).log()           
-    ttm_vals      = torch.full_like(S_vals, tau)         
-    vol_vals      = torch.full_like(S_vals, sigma)              
-
-    # NoTransactionBandNet.mlp receives (log_moneyness, time_to_maturity, volatility)
-    x_mlp_input = torch.stack([log_moneyness, ttm_vals, vol_vals], dim=-1)
+    log_moneyness = (S_vals / K).log()
+    ttm_vals      = torch.full_like(S_vals, tau)
+    vol_vals      = torch.full_like(S_vals, sigma)
+    x             = torch.stack([log_moneyness, ttm_vals, vol_vals], dim=-1)
 
     with torch.no_grad():
-        delta_vals = bs_delta(log_moneyness, ttm_vals, sigma)
-        width_vals = model.mlp(x_mlp_input)
+        delta_vals = _bs_delta_np(log_moneyness, ttm_vals, sigma)
+        width_vals = model.mlp(x)                             # (..., 2)
         lower = delta_vals - torch.nn.functional.leaky_relu(width_vals[:, 0])
         upper = delta_vals + torch.nn.functional.leaky_relu(width_vals[:, 1])
 
     return log_moneyness, delta_vals, lower, upper
+
+
+def notransactionband_ww(K, T, t, sigma, model):
+    """
+    Extract the no-transaction band from a trained WWGuidedNTBN,
+    showing the WW baseline and the learned residual separately.
+
+    Returns:
+        log_moneyness : Tensor (1000,)
+        delta_vals    : BS delta
+        lower, upper  : full band boundaries (WW + residual)
+        lower_ww, upper_ww : WW-only boundaries (no residual)
+    """
+    import math
+    tau           = T - t
+    S_vals        = torch.linspace(0.65 * K, 1.5 * K, 1000)
+    log_moneyness = (S_vals / K).log()
+    ttm_vals      = torch.full_like(S_vals, tau)
+    vol_vals      = torch.full_like(S_vals, sigma)
+    x             = torch.stack([log_moneyness, ttm_vals, vol_vals], dim=-1)
+
+    with torch.no_grad():
+        delta_vals = _bs_delta_np(log_moneyness, ttm_vals, sigma)
+
+        # WW baseline
+        h_ww = model._ww_halfwidth(
+            log_moneyness.unsqueeze(-1),
+            ttm_vals.unsqueeze(-1),
+            vol_vals.unsqueeze(-1),
+        ).squeeze(-1)
+        lower_ww = delta_vals - h_ww
+        upper_ww = delta_vals + h_ww
+
+        # Full band (WW + MLP residual)
+        width_vals = model.mlp(x)
+        lower = delta_vals - torch.nn.functional.leaky_relu(h_ww + width_vals[:, 0])
+        upper = delta_vals + torch.nn.functional.leaky_relu(h_ww + width_vals[:, 1])
+
+    return log_moneyness, delta_vals, lower, upper, lower_ww, upper_ww
 
 def compute_trade_frequency_pfhedge(hedge: torch.Tensor) -> float:
     """

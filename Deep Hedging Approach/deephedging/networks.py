@@ -3,6 +3,7 @@ from typing import List
 from typing import Optional
 from typing import Sequence
 from typing import Union
+import math
 
 import torch
 import torch.nn.functional as fn
@@ -13,6 +14,7 @@ from torch.nn import Linear
 from torch.nn import Module
 from torch.nn import ReLU
 from torch.nn import Sequential
+from torch.distributions import Normal
 
 from pfhedge.nn import BlackScholes
 from pfhedge.nn import Clamp
@@ -40,6 +42,124 @@ class NoTransactionBandNet(Module):
 
         return self.clamp(prev_hedge, min=min, max=max)
     
+class WWGuidedNTBN(Module):
+    """
+    Whalley-Wilmott Guided No-Transaction Band Network.
+
+    Improvement over the standard NoTransactionBandNet on two fronts:
+
+    1. WW-guided bandwidth: the band half-width is initialised from the
+       Whalley-Wilmott asymptotic formula
+           h_WW = (3 * lambda * sigma^2 * S^2 * Gamma_BS / (2 * gamma))^(1/3)
+       and the MLP only learns a small residual correction on top of it.
+       This gives the network the correct scaling with TC, vol and gamma
+       for free, so it converges faster and generalises better across
+       parameter regimes.
+
+    2. Soft clamp: the hard torch.clamp (zero gradient outside the band)
+       is replaced by a tanh-based smooth approximation
+           softclamp(x, l, u) = mid + half * tanh(beta * (x - mid) / half)
+       where mid = (l+u)/2, half = (u-l)/2.
+       This provides non-zero gradients everywhere, giving the network a
+       learning signal even when prev_hedge is outside the band.
+
+    Args:
+        derivative : pfhedge instrument (used for BlackScholes delta and
+                     to read the transaction cost lambda).
+        gamma      : risk-aversion coefficient matching the entropic loss.
+        n_layers   : depth of the residual-correction MLP.
+        n_units    : width of the residual-correction MLP.
+        clamp_beta : sharpness of the soft clamp (larger -> closer to hard
+                     clamp; recommended range 5-20).
+    """
+
+    def __init__(
+        self,
+        derivative,
+        gamma: float = 1.0,
+        n_layers: int = 4,
+        n_units: int = 32,
+        clamp_beta: float = 10.0,
+    ):
+        super().__init__()
+        self.derivative = derivative
+        self.gamma = gamma
+        self.clamp_beta = clamp_beta
+
+        self.delta = BlackScholes(derivative)
+        # MLP receives [log_moneyness, time_to_maturity, volatility] and
+        # outputs two residual corrections [delta_lower, delta_upper].
+        self.mlp = MultiLayerPerceptron(out_features=2, n_layers=n_layers, n_units=n_units)
+
+    def inputs(self):
+        return self.delta.inputs() + ["prev_hedge"]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _bs_gamma(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        """Black-Scholes gamma in log-moneyness / normalised-price space."""
+        sqrt_tau = ttm.sqrt().clamp(min=1e-6)
+        d1 = (log_moneyness + 0.5 * volatility ** 2 * ttm) / (volatility * sqrt_tau)
+        nd1 = torch.exp(-0.5 * d1 ** 2) / math.sqrt(2 * math.pi)
+        # S = exp(log_moneyness) because pfhedge normalises with K=1
+        S = log_moneyness.exp()
+        return nd1 / (S * volatility * sqrt_tau).clamp(min=1e-6)
+
+    def _ww_halfwidth(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        """
+        Whalley-Wilmott asymptotic half-bandwidth:
+            h_WW = (3 * lambda * sigma^2 * S^2 * Gamma / (2 * gamma))^(1/3)
+        """
+        tc = float(self.derivative.underlier.cost)
+        S = log_moneyness.exp()
+        gamma_bs = self._bs_gamma(log_moneyness, ttm, volatility)
+        numerator = 3.0 * tc * volatility ** 2 * S ** 2 * gamma_bs
+        h_ww = (numerator / (2.0 * self.gamma)).clamp(min=0.0).pow(1.0 / 3.0)
+        return h_ww
+
+    @staticmethod
+    def _soft_clamp(x: Tensor, lo: Tensor, hi: Tensor, beta: float) -> Tensor:
+        """
+        Differentiable approximation to clamp(x, lo, hi):
+            mid + half * tanh(beta * (x - mid) / half)
+        Gradient is non-zero everywhere; recovers hard clamp as beta -> inf.
+        """
+        half = ((hi - lo) / 2.0).clamp(min=1e-6)
+        mid = (lo + hi) / 2.0
+        return mid + half * torch.tanh(beta * (x - mid) / half)
+
+    # ------------------------------------------------------------------
+    # Forward pass
+    # ------------------------------------------------------------------
+
+    def forward(self, input: Tensor) -> Tensor:
+        prev_hedge = input[..., [-1]]
+        features   = input[..., :-1]          # (log_moneyness, ttm, volatility)
+
+        log_moneyness = features[..., [0]]
+        ttm           = features[..., [1]]
+        volatility    = features[..., [2]]
+
+        # 1. Band centre: Black-Scholes delta
+        delta = self.delta(features)           # shape (..., 1)
+
+        # 2. WW analytical half-width (structural prior)
+        h_ww = self._ww_halfwidth(log_moneyness, ttm, volatility)
+
+        # 3. MLP residual corrections
+        corrections = self.mlp(features)       # shape (..., 2)
+
+        # 4. Band boundaries: leaky_relu keeps width non-negative;
+        #    the MLP correction shifts the WW baseline up or down.
+        lo = delta - fn.leaky_relu(h_ww + corrections[..., [0]])
+        hi = delta + fn.leaky_relu(h_ww + corrections[..., [1]])
+
+        # 5. Soft clamp instead of hard clamp
+        return self._soft_clamp(prev_hedge, lo, hi, self.clamp_beta)
+
+
 class TwoHeadHedgeNet(Module):
     def __init__(self, in_features=7, hidden_dim=32, n_layers=3, init_price=0.01):
         super().__init__()
