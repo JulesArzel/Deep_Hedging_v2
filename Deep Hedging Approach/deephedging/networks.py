@@ -156,8 +156,8 @@ class WWGuidedNTBN(Module):
         lo = delta - fn.leaky_relu(h_ww + corrections[..., [0]])
         hi = delta + fn.leaky_relu(h_ww + corrections[..., [1]])
 
-        # 5. Soft clamp instead of hard clamp
-        return self._soft_clamp(prev_hedge, lo, hi, self.clamp_beta)
+        # 5. Hard clamp (same as standard NTBN)
+        return prev_hedge.clamp(lo, hi)
 
 
 class TwoHeadHedgeNet(Module):
