@@ -34,13 +34,11 @@ class NoTransactionBandNet(Module):
     def forward(self, input: Tensor) -> Tensor:
         prev_hedge = input[..., [-1]]
 
-        delta = self.delta(input[..., :-1])
-        width = self.mlp(input[..., :-1])
+        out = self.mlp(input[..., :-1])
+        lo  = out[..., [0]]
+        hi  = lo + fn.softplus(out[..., [1]])   # guarantees hi > lo, no delta anchor
 
-        min = delta - fn.leaky_relu(width[..., [0]])
-        max = delta + fn.leaky_relu(width[..., [1]])
-
-        return self.clamp(prev_hedge, min=min, max=max)
+        return self.clamp(prev_hedge, min=lo, max=hi)
     
 class WWGuidedNTBN(Module):
     """
