@@ -33,10 +33,13 @@ class NoTransactionBandNet(Module):
 
     def forward(self, input: Tensor) -> Tensor:
         prev_hedge = input[..., [-1]]
+        features   = input[..., :-1]
 
-        out = self.mlp(input[..., :-1])
-        lo  = out[..., [0]]
-        hi  = lo + fn.softplus(out[..., [1]])   # guarantees hi > lo, no delta anchor
+        # Band centred on BS delta, matching the authors' published implementation
+        delta = self.delta(features)
+        out   = self.mlp(features)
+        lo    = delta - fn.softplus(out[..., [0]])
+        hi    = delta + fn.softplus(out[..., [1]])
 
         return self.clamp(prev_hedge, min=lo, max=hi)
     
