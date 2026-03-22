@@ -20,11 +20,27 @@ from pfhedge.nn import BlackScholes
 from pfhedge.nn import Clamp
 
 
+def _make_bs_delta(derivative):
+    """
+    Return (bs_module, negate) where negate=True when the derivative is a
+    NegativeEuropeanOption (pfhedge's BS factory only handles EuropeanOption).
+    """
+    if derivative.__class__.__name__ == "NegativeEuropeanOption":
+        from pfhedge.instruments import EuropeanOption
+        eq = EuropeanOption(
+            derivative.underlier,
+            strike=derivative.strike,
+            maturity=derivative.maturity,
+        )
+        return BlackScholes(eq), True
+    return BlackScholes(derivative), False
+
+
 class NoTransactionBandNet(Module):
     def __init__(self, derivative):
         super().__init__()
 
-        self.delta = BlackScholes(derivative)
+        self.delta, self._negate_delta = _make_bs_delta(derivative)
         self.mlp = MultiLayerPerceptron(out_features=2)
         self.clamp = Clamp()
 
@@ -37,6 +53,8 @@ class NoTransactionBandNet(Module):
 
         # Band centred on BS delta, matching the authors' published implementation
         delta = self.delta(features)
+        if self._negate_delta:
+            delta = -delta
         out   = self.mlp(features)
         lo    = delta - fn.softplus(out[..., [0]])
         hi    = delta + fn.softplus(out[..., [1]])
@@ -87,7 +105,7 @@ class WWGuidedNTBN(Module):
         self.gamma = gamma
         self.clamp_beta = clamp_beta
 
-        self.delta = BlackScholes(derivative)
+        self.delta, self._negate_delta = _make_bs_delta(derivative)
         # MLP receives [log_moneyness, time_to_maturity, volatility] and
         # outputs two residual corrections [delta_lower, delta_upper].
         self.mlp = MultiLayerPerceptron(out_features=2, n_layers=n_layers, n_units=n_units)
@@ -145,6 +163,8 @@ class WWGuidedNTBN(Module):
 
         # 1. Band centre: Black-Scholes delta
         delta = self.delta(features)           # shape (..., 1)
+        if self._negate_delta:
+            delta = -delta
 
         # 2. WW analytical half-width (structural prior)
         h_ww = self._ww_halfwidth(log_moneyness, ttm, volatility)
@@ -158,6 +178,113 @@ class WWGuidedNTBN(Module):
         hi = delta + fn.leaky_relu(h_ww + corrections[..., [1]])
 
         # 5. Hard clamp (same as standard NTBN)
+        return prev_hedge.clamp(lo, hi)
+
+
+class WWGuidedNTBN_CS(Module):
+    """
+    WW-Guided No-Transaction Band Network for a Call Spread Buyer.
+
+    Adapts WWGuidedNTBN to the NegativeCallSpread derivative:
+
+    - Band centre: δ(K₂) − δ(K₁)  (negative — buyer shorts the net delta)
+    - WW half-width uses the spread gamma |Γ(K₂) − Γ(K₁)|, which is
+      smaller than individual gammas, encoding the delta-cancellation
+      benefit of joint hedging directly in the structural prior.
+
+    Args:
+        derivative   : NegativeCallSpread instance.
+        strike_long  : K₁ (long leg).
+        strike_short : K₂ (short leg), K₂ > K₁.
+        gamma        : risk-aversion coefficient.
+        n_layers, n_units : MLP depth / width.
+    """
+
+    def __init__(
+        self,
+        derivative,
+        strike_long: float,
+        strike_short: float,
+        gamma: float = 1.0,
+        n_layers: int = 4,
+        n_units: int = 32,
+    ):
+        super().__init__()
+        self.derivative   = derivative
+        self.strike_long  = strike_long
+        self.strike_short = strike_short
+        self.gamma        = gamma
+        self._log_k_ratio = math.log(strike_long / strike_short)  # log(K1/K2) < 0
+
+        self.mlp = MultiLayerPerceptron(out_features=2, n_layers=n_layers, n_units=n_units)
+
+    def inputs(self):
+        return ["log_moneyness", "expiry_time", "volatility", "prev_hedge"]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _d1(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor):
+        """Return (d1_K1, d1_K2) using log_moneyness = log(S/K1)."""
+        sqrt_tau = ttm.sqrt().clamp(min=1e-6)
+        half_var_tau = 0.5 * volatility ** 2 * ttm
+        d1_K1 = (log_moneyness + half_var_tau) / (volatility * sqrt_tau)
+        lm_K2 = log_moneyness + self._log_k_ratio   # log(S/K2) = log(S/K1) + log(K1/K2)
+        d1_K2 = (lm_K2      + half_var_tau) / (volatility * sqrt_tau)
+        return d1_K1, d1_K2
+
+    def _spread_delta(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        """Band centre: Φ(d1_K2) − Φ(d1_K1)  (negative — short net delta)."""
+        d1_K1, d1_K2 = self._d1(log_moneyness, ttm, volatility)
+        # Φ(x) = 0.5*(1 + erf(x/√2)) — avoids Normal.cdf input validation
+        _sqrt2 = math.sqrt(2.0)
+        phi_K1 = 0.5 * (1.0 + torch.erf(d1_K1 / _sqrt2))
+        phi_K2 = 0.5 * (1.0 + torch.erf(d1_K2 / _sqrt2))
+        return phi_K2 - phi_K1
+
+    def _spread_gamma(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        """
+        |Γ(K₂) − Γ(K₁)| — absolute spread gamma.
+        Uses the same normalised-S approximation as WWGuidedNTBN for consistency.
+        """
+        sqrt_tau = ttm.sqrt().clamp(min=1e-6)
+        d1_K1, d1_K2 = self._d1(log_moneyness, ttm, volatility)
+        nd1_K1 = torch.exp(-0.5 * d1_K1 ** 2) / math.sqrt(2 * math.pi)
+        nd1_K2 = torch.exp(-0.5 * d1_K2 ** 2) / math.sqrt(2 * math.pi)
+        S_K1 = log_moneyness.exp()                        # S / K1
+        S_K2 = (log_moneyness + self._log_k_ratio).exp()  # S / K2
+        denom = (volatility * sqrt_tau).clamp(min=1e-6)
+        gamma_K1 = nd1_K1 / (S_K1 * denom)
+        gamma_K2 = nd1_K2 / (S_K2 * denom)
+        return (gamma_K2 - gamma_K1).abs()
+
+    def _ww_halfwidth(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        tc = float(self.derivative.underlier.cost)
+        S  = log_moneyness.exp()
+        gamma_spread = self._spread_gamma(log_moneyness, ttm, volatility)
+        numerator = 3.0 * tc * volatility ** 2 * S ** 2 * gamma_spread
+        return (numerator / (2.0 * self.gamma)).clamp(min=0.0).pow(1.0 / 3.0)
+
+    # ------------------------------------------------------------------
+    # Forward pass
+    # ------------------------------------------------------------------
+
+    def forward(self, input: Tensor) -> Tensor:
+        prev_hedge = input[..., [-1]]
+        features   = input[..., :-1]
+
+        log_moneyness = features[..., [0]]
+        ttm           = features[..., [1]]
+        volatility    = features[..., [2]]
+
+        delta       = self._spread_delta(log_moneyness, ttm, volatility)
+        h_ww        = self._ww_halfwidth(log_moneyness, ttm, volatility)
+        corrections = self.mlp(features)
+
+        lo = delta - fn.leaky_relu(h_ww + corrections[..., [0]])
+        hi = delta + fn.leaky_relu(h_ww + corrections[..., [1]])
+
         return prev_hedge.clamp(lo, hi)
 
 
