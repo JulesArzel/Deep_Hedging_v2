@@ -181,6 +181,89 @@ class WWGuidedNTBN(Module):
         return prev_hedge.clamp(lo, hi)
 
 
+class WWGuidedNTBN2(Module):
+    """
+    Whalley-Wilmott Guided No-Transaction Band Network — corrected formula.
+
+    Uses the alternative WW half-width:
+        h_WW = (3 * lambda * S * Gamma^2 / (2 * gamma))^(1/3)
+    instead of the original (3 * lambda * sigma^2 * S^2 * Gamma / (2 * gamma))^(1/3).
+
+    Everything else (band centre = BS delta, MLP residual correction,
+    soft clamp) is identical to WWGuidedNTBN.
+
+    Args:
+        derivative : pfhedge instrument.
+        gamma      : risk-aversion coefficient matching the entropic loss.
+        n_layers   : depth of the residual-correction MLP.
+        n_units    : width of the residual-correction MLP.
+        clamp_beta : sharpness of the soft clamp.
+    """
+
+    def __init__(
+        self,
+        derivative,
+        gamma: float = 1.0,
+        n_layers: int = 4,
+        n_units: int = 32,
+        clamp_beta: float = 10.0,
+    ):
+        super().__init__()
+        self.derivative = derivative
+        self.gamma = gamma
+        self.clamp_beta = clamp_beta
+
+        self.delta, self._negate_delta = _make_bs_delta(derivative)
+        self.mlp = MultiLayerPerceptron(out_features=2, n_layers=n_layers, n_units=n_units)
+
+    def inputs(self):
+        return self.delta.inputs() + ["prev_hedge"]
+
+    def _bs_gamma(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        sqrt_tau = ttm.sqrt().clamp(min=1e-6)
+        d1 = (log_moneyness + 0.5 * volatility ** 2 * ttm) / (volatility * sqrt_tau)
+        nd1 = torch.exp(-0.5 * d1 ** 2) / math.sqrt(2 * math.pi)
+        S = log_moneyness.exp()
+        return nd1 / (S * volatility * sqrt_tau).clamp(min=1e-6)
+
+    def _ww_halfwidth(self, log_moneyness: Tensor, ttm: Tensor, volatility: Tensor) -> Tensor:
+        """
+        Corrected WW half-width:
+            h_WW = (3 * lambda * S * Gamma^2 / (2 * gamma))^(1/3)
+        """
+        tc = float(self.derivative.underlier.cost)
+        S = log_moneyness.exp()
+        gamma_bs = self._bs_gamma(log_moneyness, ttm, volatility)
+        numerator = 3.0 * tc * S * gamma_bs ** 2
+        return (numerator / (2.0 * self.gamma)).clamp(min=0.0).pow(1.0 / 3.0)
+
+    @staticmethod
+    def _soft_clamp(x: Tensor, lo: Tensor, hi: Tensor, beta: float) -> Tensor:
+        half = ((hi - lo) / 2.0).clamp(min=1e-6)
+        mid = (lo + hi) / 2.0
+        return mid + half * torch.tanh(beta * (x - mid) / half)
+
+    def forward(self, input: Tensor) -> Tensor:
+        prev_hedge = input[..., [-1]]
+        features   = input[..., :-1]
+
+        log_moneyness = features[..., [0]]
+        ttm           = features[..., [1]]
+        volatility    = features[..., [2]]
+
+        delta = self.delta(features)
+        if self._negate_delta:
+            delta = -delta
+
+        h_ww        = self._ww_halfwidth(log_moneyness, ttm, volatility)
+        corrections = self.mlp(features)
+
+        lo = delta - fn.leaky_relu(h_ww + corrections[..., [0]])
+        hi = delta + fn.leaky_relu(h_ww + corrections[..., [1]])
+
+        return prev_hedge.clamp(lo, hi)
+
+
 class WWGuidedNTBN_CS(Module):
     """
     WW-Guided No-Transaction Band Network for a Call Spread Buyer.
