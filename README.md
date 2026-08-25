@@ -1,6 +1,6 @@
 # Deep_Hedging_WW-NTBN
 
-Comparison of various hedging strategies in the presence of transaction costs. The project is now complete, and the full write-up is available both as a pdf in this repo (WW-NTBN.pdf) and as a paper on arXiv, *Bridging Stochastic Control and Deep Hedging: Structural Priors for No-Transaction Band Networks* (joint work with Noureddine Lehdili) [LINK].
+Comparison of various hedging strategies in the presence of transaction costs. The project is now complete, and the full write-up is available both as a pdf in this repo (WW-NTBN.pdf) and as a paper on arXiv, *Bridging Stochastic Control and Deep Hedging: Structural Priors for No-Transaction Band Networks* (joint work with Noureddine Lehdili) https://arxiv.org/abs/2603.29994.
 
 The goal of the project is to compare two very different ways of solving the same hedging problem, an investor holding a stock and a short position in a call option (or call spread), who wants to hedge as well as possible once transaction costs are introduced. On one side we have stochastic control, which gives an exact but computationally heavy solution via dynamic programming. On the other we have deep hedging, which trains a neural network to hedge directly. The main contribution of the project is the WW-NTBN, a network architecture that injects the Whalley-Wilmott asymptotic result from the stochastic control side directly into the deep hedging network, so that the two approaches inform each other instead of being treated separately.
 
