@@ -1,5 +1,5 @@
-# Deep_Hedging_WWNTB
-Comparison of various hedging strategies in the presence of transaction costs, includes a written document to explain the strategies (WW-NTB.pdf).
+# Deep_Hedging_WW-NTBN
+Comparison of various hedging strategies in the presence of transaction costs, includes a written document to explain the strategies (WW-NTBN.pdf).
 
 **BS-Leland** :  
 
